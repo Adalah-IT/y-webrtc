@@ -217,7 +217,7 @@ export class LaravelEchoAdapter extends SignalingAdapter {
   _getChannelName (topic) {
     // Use private channel for y-webrtc rooms
     // You can customize this based on your Laravel setup
-    return `private-y-webrtc.${topic}`
+    return `y-webrtc.${topic}`
   }
 
   /**
