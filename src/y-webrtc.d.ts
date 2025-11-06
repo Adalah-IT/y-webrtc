@@ -91,13 +91,99 @@ export class LaravelEchoAdapter extends SignalingAdapter {
 }
 
 /**
+ * Presence channel member information
+ */
+export interface PresenceChannelMember {
+  id: number | string
+  info: any
+}
+
+/**
+ * Callbacks for presence channel events
+ */
+export interface PresenceCallbacks {
+  /**
+   * Called when subscription succeeds with list of all members
+   */
+  onHere?: (members: PresenceChannelMember[]) => void
+  /**
+   * Called when a new member joins the channel
+   */
+  onJoining?: (member: PresenceChannelMember) => void
+  /**
+   * Called when a member leaves the channel
+   */
+  onLeaving?: (member: PresenceChannelMember) => void
+  /**
+   * Called when there's an error subscribing to a channel
+   */
+  onError?: (error: any, channelName: string) => void
+  /**
+   * Called when successfully subscribed to a channel
+   */
+  onSubscribed?: (channelName: string) => void
+}
+
+/**
+ * Laravel Echo Presence Channel adapter for signaling.
+ * This adapter uses Laravel Echo's presence channels, which provide information
+ * about who is subscribed to the channel.
+ */
+export class LaravelEchoPresenceAdapter extends SignalingAdapter {
+  /**
+   * @param echo - Laravel Echo instance
+   * @param callbacks - Optional callbacks for presence events
+   */
+  constructor(echo: any, callbacks?: PresenceCallbacks)
+
+  echo: any
+  channels: Map<string, any>
+  readyChannels: Set<string>
+  messageQueue: Map<string, any[]>
+  shouldConnect: boolean
+  presenceMembers: Map<string, PresenceChannelMember[]>
+  callbacks: PresenceCallbacks
+
+  /**
+   * Set callback for when the initial member list is received
+   */
+  onHere(callback: (members: PresenceChannelMember[]) => void): this
+
+  /**
+   * Set callback for when a new member joins
+   */
+  onJoining(callback: (member: PresenceChannelMember) => void): this
+
+  /**
+   * Set callback for when a member leaves
+   */
+  onLeaving(callback: (member: PresenceChannelMember) => void): this
+
+  /**
+   * Set callback for subscription errors
+   */
+  onError(callback: (error: any, channelName: string) => void): this
+
+  /**
+   * Set callback for successful subscriptions
+   */
+  onSubscribed(callback: (channelName: string) => void): this
+
+  /**
+   * Get the current members of a topic's presence channel
+   */
+  getPresenceMembers(topic: string): PresenceChannelMember[]
+}
+
+/**
  * Configuration for signaling adapters
  */
 export interface SignalingAdapterConfig {
-  type: 'default' | 'laravel-echo'
+  type: 'default' | 'laravel-echo' | 'echo' | 'echo-presence'
   url?: string
   echo?: any
   channelName?: string
+  callbacks?: PresenceCallbacks
 }
 
 /**

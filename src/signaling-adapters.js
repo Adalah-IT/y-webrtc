@@ -8,4 +8,5 @@
 export { SignalingAdapter } from './signaling-adapters/SignalingAdapter.js'
 export { DefaultSignalingAdapter } from './signaling-adapters/DefaultSignalingAdapter.js'
 export { LaravelEchoAdapter } from './signaling-adapters/LaravelEchoAdapter.js'
+export { LaravelEchoPresenceAdapter } from './signaling-adapters/LaravelEchoPresenceAdapter.js'
 export { createSignalingAdapter } from './signaling-adapters/factory.js'

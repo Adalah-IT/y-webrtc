@@ -769,4 +769,4 @@ export class WebrtcProvider extends ObservableV2 {
 }
 
 // Export adapter classes for users to create custom adapters or use built-in ones
-export { SignalingAdapter, DefaultSignalingAdapter, LaravelEchoAdapter, createSignalingAdapter } from './signaling-adapters.js'
+export { SignalingAdapter, DefaultSignalingAdapter, LaravelEchoAdapter, LaravelEchoPresenceAdapter, createSignalingAdapter } from './signaling-adapters.js'
