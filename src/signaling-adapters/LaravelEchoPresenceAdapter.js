@@ -161,9 +161,7 @@ export class LaravelEchoPresenceAdapter extends SignalingAdapter {
    * @returns {string}
    */
   _getChannelName (topic) {
-    // Use presence channel for y-webrtc rooms
-    // You can customize this based on your Laravel setup
-    return `y-webrtc.${topic}`
+    return topic
   }
 
   /**
