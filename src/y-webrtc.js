@@ -27,6 +27,9 @@ const messageSync = 0
 const messageQueryAwareness = 3
 const messageAwareness = 1
 const messageBcPeerId = 4
+const messageChunk = 5
+
+const CHUNK_SIZE = 10 * 1000 // ~9.5kb in bytes
 
 /**
  * @type {Map<string, SignalingConn>}
@@ -37,6 +40,105 @@ const signalingConns = new Map()
  * @type {Map<string,Room>}
  */
 const rooms = new Map()
+
+/**
+ * Store for reassembling chunked messages
+ * @type {Map<string, Map<string, Array<Uint8Array>>>}
+ */
+const chunkBuffers = new Map()
+
+/**
+ * Splits a message into chunks if it exceeds CHUNK_SIZE
+ * @param {Uint8Array} message - The message to chunk
+ * @returns {Array<Uint8Array>} Array of chunks (single item if message is small enough)
+ */
+const createChunks = (message) => {
+  if (message.byteLength <= CHUNK_SIZE) {
+    // Message fits in a single chunk
+    return [message]
+  }
+
+  const chunks = []
+  const chunkId = random.uuidv4()
+  const totalParts = Math.ceil(message.byteLength / CHUNK_SIZE)
+
+  for (let i = 0; i < totalParts; i++) {
+    const start = i * CHUNK_SIZE
+    const end = Math.min(start + CHUNK_SIZE, message.byteLength)
+    const chunk = message.subarray(start, end)
+
+    // Create a new encoder for this chunk
+    const encoder = encoding.createEncoder()
+    encoding.writeVarUint(encoder, messageChunk)
+    encoding.writeVarString(encoder, chunkId)
+    encoding.writeVarUint(encoder, i) // partIndex
+    encoding.writeVarUint(encoder, totalParts)
+    encoding.writeVarUint8Array(encoder, chunk)
+
+    chunks.push(encoding.toUint8Array(encoder))
+  }
+
+  return chunks
+}
+
+/**
+ * Reassembles chunked messages
+ * @param {string} peerId - The peer identifier for tracking chunks
+ * @param {Uint8Array} data - The received chunk data
+ * @returns {Uint8Array|null} The reassembled message or null if more chunks are needed
+ */
+const reassembleChunk = (peerId, data) => {
+  const decoder = decoding.createDecoder(data)
+  const messageType = decoding.readVarUint(decoder)
+
+  if (messageType !== messageChunk) {
+    // Not a chunk message, return as-is
+    return data
+  }
+
+  const chunkId = decoding.readVarString(decoder)
+  const partIndex = decoding.readVarUint(decoder)
+  const totalParts = decoding.readVarUint(decoder)
+  const chunkData = decoding.readVarUint8Array(decoder)
+
+  // Get or create buffer for this peer
+  if (!chunkBuffers.has(peerId)) {
+    chunkBuffers.set(peerId, new Map())
+  }
+  const peerBuffers = chunkBuffers.get(peerId)
+
+  // Get or create array for this chunk ID
+  if (!peerBuffers.has(chunkId)) {
+    peerBuffers.set(chunkId, new Array(totalParts))
+  }
+  const chunks = peerBuffers.get(chunkId)
+
+  // Store this chunk
+  chunks[partIndex] = chunkData
+
+  // Check if all chunks are received
+  const allReceived = chunks.every(c => c !== undefined)
+  if (!allReceived) {
+    return null // Still waiting for more chunks
+  }
+
+  // Reassemble the message
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+  const reassembled = new Uint8Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    reassembled.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  // Clean up
+  peerBuffers.delete(chunkId)
+  if (peerBuffers.size === 0) {
+    chunkBuffers.delete(peerId)
+  }
+
+  return reassembled
+}
 
 /**
  * @param {Room} room
@@ -147,7 +249,11 @@ const readPeerMessage = (peerConn, buf) => {
 const sendWebrtcConn = (webrtcConn, encoder) => {
   log('send message to ', logging.BOLD, webrtcConn.remotePeerId, logging.UNBOLD, logging.GREY, ' (', webrtcConn.room.name, ')', logging.UNCOLOR)
   try {
-    webrtcConn.peer.send(encoding.toUint8Array(encoder))
+    const message = encoding.toUint8Array(encoder)
+    const chunks = createChunks(message)
+    chunks.forEach(chunk => {
+      webrtcConn.peer.send(chunk)
+    })
   } catch (e) {}
 }
 
@@ -157,10 +263,13 @@ const sendWebrtcConn = (webrtcConn, encoder) => {
  */
 const broadcastWebrtcConn = (room, m) => {
   log('broadcast message in ', logging.BOLD, room.name, logging.UNBOLD)
+  const chunks = createChunks(m)
   room.webrtcConns.forEach(conn => {
-    try {
-      conn.peer.send(m)
-    } catch (e) {}
+    chunks.forEach(chunk => {
+      try {
+        conn.peer.send(chunk)
+      } catch (e) {}
+    })
   })
 }
 
@@ -231,9 +340,12 @@ export class WebrtcConn {
       announceSignalingInfo(room)
     })
     this.peer.on('data', data => {
-      const answer = readPeerMessage(this, data)
-      if (answer !== null) {
-        sendWebrtcConn(this, answer)
+      const reassembled = reassembleChunk(remotePeerId, data)
+      if (reassembled !== null) {
+        const answer = readPeerMessage(this, reassembled)
+        if (answer !== null) {
+          sendWebrtcConn(this, answer)
+        }
       }
     })
   }
@@ -247,11 +359,16 @@ export class WebrtcConn {
  * @param {Room} room
  * @param {Uint8Array} m
  */
-const broadcastBcMessage = (room, m) => cryptoutils.encrypt(m, room.key).then(data =>
-  room.mux(() =>
-    bc.publish(room.name, data)
-  )
-)
+const broadcastBcMessage = (room, m) => {
+  const chunks = createChunks(m)
+  return Promise.all(chunks.map(chunk =>
+    cryptoutils.encrypt(chunk, room.key).then(data =>
+      room.mux(() =>
+        bc.publish(room.name, data)
+      )
+    )
+  ))
+}
 
 /**
  * @param {Room} room
@@ -331,14 +448,17 @@ export class Room {
      * @param {ArrayBuffer} data
      */
     this._bcSubscriber = data =>
-      cryptoutils.decrypt(new Uint8Array(data), key).then(m =>
-        this.mux(() => {
-          const reply = readMessage(this, m, () => {})
-          if (reply) {
-            broadcastBcMessage(this, encoding.toUint8Array(reply))
-          }
-        })
-      )
+      cryptoutils.decrypt(new Uint8Array(data), key).then(m => {
+        const reassembled = reassembleChunk(`bc-${this.name}`, m)
+        if (reassembled !== null) {
+          this.mux(() => {
+            const reply = readMessage(this, reassembled, () => {})
+            if (reply) {
+              broadcastBcMessage(this, encoding.toUint8Array(reply))
+            }
+          })
+        }
+      })
     /**
      * Listens to Yjs updates and sends them to remote peers
      *
