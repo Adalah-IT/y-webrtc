@@ -3,6 +3,7 @@
  */
 
 import { SignalingAdapter } from './SignalingAdapter.js'
+import { wrapForWire, unwrapFromWire } from './reverbWireFormat.js'
 
 /**
  * @typedef {Object} PresenceChannelMember
@@ -230,12 +231,12 @@ export class LaravelEchoPresenceAdapter extends SignalingAdapter {
 
       // Listen for signaling messages
       channel.listen('.signaling', (event) => {
-        this.emit('message', [{ topic, data: event.data }])
+        this.emit('message', [{ topic, data: unwrapFromWire(event.data) }])
       })
 
       // Also support whisper for peer-to-peer messages
       channel.listenForWhisper('signaling', (event) => {
-        this.emit('message', [{ topic, data: event }])
+        this.emit('message', [{ topic, data: unwrapFromWire(event) }])
       })
 
       this.channels.set(topic, channel)
@@ -266,15 +267,17 @@ export class LaravelEchoPresenceAdapter extends SignalingAdapter {
     const channel = this.channels.get(topic)
     if (!channel) return
 
+    const wireData = wrapForWire(data)
+
     // Only whisper if the channel subscription is ready
     if (this.readyChannels.has(topic)) {
-      channel.whisper('signaling', data)
+      channel.whisper('signaling', wireData)
     } else {
       // Queue the message until subscription is ready
       if (!this.messageQueue.has(topic)) {
         this.messageQueue.set(topic, [])
       }
-      this.messageQueue.get(topic).push(data)
+      this.messageQueue.get(topic).push(wireData)
     }
   }
 
